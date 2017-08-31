@@ -1,0 +1,12 @@
+framework >= net40
+source https://www.nuget.org/api/v2
+
+nuget Deedle
+nuget FAKE
+nuget FSharp.Data.SqlClient
+nuget Suave
+nuget FSharp.Data
+nuget Newtonsoft.Json
+nuget FSharp.Compiler.Service
+nuget FSharp.Compiler.Tools
+nuget FSharp.Azure.StorageTypeProvider
