@@ -58,7 +58,7 @@ Target "start" (fun _ ->
 
 Target "run" (fun _ ->
   traceImportant "Press any key to stop!"
-  Console.ReadKey() |> ignore
+  Console.ReadLine() |> ignore
 )
 
 "start" ==> "run"

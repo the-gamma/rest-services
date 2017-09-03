@@ -1,4 +1,4 @@
-namespace TheGamma
+namespace TheGamma.Services
 
 open System
 open System.IO
@@ -6,7 +6,7 @@ open System.Collections.Generic
 open FSharp.Data
 
 // ------------------------------------------------------------------------------------------------
-//
+// F# friendly representation of REST provider schema
 // ------------------------------------------------------------------------------------------------
 
 type Type =
@@ -32,6 +32,10 @@ type Schema =
 
 type Member = 
   | Member of name:string * pars:Parameter list option * returns:Result * trace:string list * schema:Schema list
+
+// ------------------------------------------------------------------------------------------------
+// Serialize `seq<Member>` and return members as Suave response
+// ------------------------------------------------------------------------------------------------
 
 module Serializer = 
   let rec serializeType = function
