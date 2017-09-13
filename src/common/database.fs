@@ -1,12 +1,26 @@
 module TheGamma.Services.Database
 (*
 open System.IO
-open System.Text
 *)
+open System.Text
 open System
 open System.Data
 open System.Data.SqlClient
 open TheGamma.Services.Storage
+
+let scriptTable table tableType =
+  let fields =
+    [ for header, typ in tableType ->
+        match typ with 
+        | Pivot.InferredType.Bool | Pivot.InferredType.OneZero -> header, "bit"
+        | Pivot.InferredType.Date _ -> header, "datetimeoffset"
+        | Pivot.InferredType.Float -> header, "real" 
+        | Pivot.InferredType.Int -> header, "int" 
+        | Pivot.InferredType.String | Pivot.InferredType.Any -> header, "ntext" ]
+    |> Seq.map (fun (h, t) -> sprintf "%s %s NULL" (Pivot.formatName h) t)
+    |> String.concat ",\n  " 
+  sprintf "CREATE TABLE dbo.%s (\n  %s\n)\n\n" (Pivot.formatName table) fields
+
 (*
 open Microsoft.FSharp.Reflection
 
@@ -81,14 +95,13 @@ let executeReader sqlConn sql parse =
   let res = ResizeArray<_>()
   while rdr.Read() do res.Add(parse rdr)
   res
-(*
 
 let executeScalarCommand sqlConn sql = 
   use conn = new SqlConnection(sqlConn)
   conn.Open()
   use cmd = new SqlCommand(sql, conn)
   cmd.ExecuteScalar()
-
+(*
 let initializeExternalBlob storageAccount = 
   executeCommand 
     ( "CREATE EXTERNAL DATA SOURCE TheGammaStorage "  +

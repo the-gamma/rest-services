@@ -1,4 +1,4 @@
-module Services.Main
+module TheGamma.Services.Main
 
 // --------------------------------------------------------------------------------------
 // Entry-point for a real compiled server
@@ -11,7 +11,8 @@ open System
 
 /// List of available servers - corresponds to folders
 let servers = 
-  [ "minimal", Services.Minimal.app ] |> dict
+  [ "enigma", Enigma.app 
+    "eurostat", Eurostat.app ] |> dict
   
 /// Drop the <s> part from http://localhost:123/<s>/something
 let dropPrefix part ctx = 

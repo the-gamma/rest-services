@@ -6,9 +6,9 @@
 #r "System.Transactions"
 #I "../common"
 #load "../../packages/FSharp.Azure.StorageTypeProvider/StorageTypeProvider.fsx"
-#load "serializer.fs" "storage.fs" "database.fs" "pivot.fs"
+#load "serializer.fs" "storage.fs" "pivot.fs" "database.fs" 
 #else
-module GovUk.Airquality
+module TheGamma.Services.Enigma
 #endif
 open System
 open System.IO
@@ -110,19 +110,6 @@ let rec findPath path (datasets:seq<Dataset>) = async {
 
 open System.Text
 
-let scriptTable table tableType =
-  let fields =
-    [ for header, typ in tableType ->
-        match typ with 
-        | Pivot.InferredType.Bool | Pivot.InferredType.OneZero -> header, "bit"
-        | Pivot.InferredType.Date _ -> header, "datetimeoffset"
-        | Pivot.InferredType.Float -> header, "real" 
-        | Pivot.InferredType.Int -> header, "int" 
-        | Pivot.InferredType.String | Pivot.InferredType.Any -> header, "ntext" ]
-    |> Seq.map (fun (h, t) -> sprintf "[%s] %s NULL" h t)
-    |> String.concat ",\n  " 
-  sprintf "CREATE TABLE dbo.[%s] (\n  %s\n)\n\n"  table fields
-
 let formatJson = function
   | JsonValue.Boolean true -> "true"
   | JsonValue.Boolean false -> "false"
@@ -161,7 +148,7 @@ let cacheDataset full datasetName = async {
   let! firstPage = downloadPage 1 datasetName 
   let types = inferTableTypes firstPage.Result
   let headers = Array.map fst types
-  let sql = scriptTable tableName types
+  let sql = Database.scriptTable tableName types
   Database.executeCommand connStrSql sql
   Database.insertRecords connStrBlob connStrSql "enigma" tableName 0 (readRows headers firstPage.Result)
   printfn "Caching '%s' page %d/%d: stored first page" datasetName 1 firstPage.Info.TotalPages
@@ -280,7 +267,7 @@ let app =
         failwith "Invalid dataset name"
       let! meta = ensureCacheDataset false id
       let table = sprintf "enigma-%s-preview" id
-      return! Pivot.handleSqlRequest connStrSql table meta (List.map fst ctx.request.query) ctx })
+      return! Pivot.handleSqlRequest (Database.executeReader connStrSql) table meta (List.map fst ctx.request.query) ctx })
       (*
       let data = 
         Database.executeReader connStrSql (sprintf "SELECT * FROM [enigma-%s-preview]" id)

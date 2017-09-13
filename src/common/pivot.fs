@@ -572,14 +572,14 @@ translateQuery demo.Transformations
 
 *)
 
-let runQuery connStrSql table meta tfs = 
+let runQuery (exec:string -> (System.Data.SqlClient.SqlDataReader -> _) -> ResizeArray<_>) table meta tfs = 
   let query = 
     translateQuery (Map.ofSeq meta) tfs 
       { Select = meta |> Array.map (fst >> Column) |> List.ofArray
         Source = Table table; Paging = None; OrderBy = None }
     |> formatSqlQuery 
   printfn "SQL: %s" query
-  Database.executeReader connStrSql query
+  exec query
     (fun row -> meta |> Array.mapi (fun i (col, typ) ->
       let isNull = row.IsDBNull(i)
       match typ with
@@ -591,7 +591,7 @@ let runQuery connStrSql table meta tfs =
       | InferredType.Int -> col, Value.Number(float(row.GetInt32(i)))
       | InferredType.Float -> col, Value.Number(float(row.GetFloat(i))) ))   
 
-let handleSqlRequest connStrSql table meta query = 
+let handleSqlRequest exec table meta query = 
   //let source = source |> Seq.ofArray
   let preview, query = query |> List.partition ((=) "preview")
   let isPreview = not (List.isEmpty preview)
@@ -606,7 +606,7 @@ let handleSqlRequest connStrSql table meta query =
         JsonValue.Record [| for k, v in meta -> k, JsonValue.String (formatType v) |]
     
     | GetTheData ->
-        let res = runQuery connStrSql table meta query.Transformations
+        let res = runQuery exec table meta query.Transformations
         res.ToArray() |> serialize false
 
     | _ -> JsonValue.Array [||]  

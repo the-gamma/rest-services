@@ -58,6 +58,7 @@
     <Compile Include="common\database.fs" />
     <Compile Include="common\pivot.fs" />
     <Compile Include="servers\enigma.fsx" />
+    <Compile Include="servers\eurostat.fsx" />
     <Compile Include="release.fs" />
     <None Include="debug.fsx" />
     <None Include="paket.references" />
