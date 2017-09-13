@@ -209,7 +209,7 @@ let rec ensureCacheDataset full datasetName = async {
         match col.Type with 
         | "string" -> col.Name, Pivot.InferredType.String
         | "bool" -> col.Name, Pivot.InferredType.Bool
-        | "date" -> col.Name, Pivot.InferredType.Date(System.Globalization.CultureInfo.GetCultureInfo(col.Format.Value))
+        | "date" -> col.Name, Pivot.InferredType.Date(System.Globalization.CultureInfo.GetCultureInfo(defaultArg col.Format ""))
         | "int" -> col.Name, Pivot.InferredType.Int
         | "float" -> col.Name, Pivot.InferredType.Float
         | _ -> col.Name, Pivot.InferredType.String)
@@ -279,6 +279,9 @@ let app =
       if id |> Seq.forall (fun c -> c = '.' || c = '-' || Char.IsLetterOrDigit(c)) |> not then 
         failwith "Invalid dataset name"
       let! meta = ensureCacheDataset false id
+      let table = sprintf "enigma-%s-preview" id
+      return! Pivot.handleSqlRequest connStrSql table meta (List.map fst ctx.request.query) ctx })
+      (*
       let data = 
         Database.executeReader connStrSql (sprintf "SELECT * FROM [enigma-%s-preview]" id)
           (fun row -> meta |> Array.mapi (fun i (col, typ) ->
@@ -291,8 +294,8 @@ let app =
             | Pivot.InferredType.Date _ -> col, Pivot.Value.Date(row.GetDateTimeOffset(i))
             | Pivot.InferredType.Int -> col, Pivot.Value.Number(float(row.GetInt32(i)))
             | Pivot.InferredType.Float -> col, Pivot.Value.Number(float(row.GetFloat(i))) )) 
-      return! Pivot.handleRequest meta (data.ToArray()) (List.map fst ctx.request.query) ctx })
-
+      return! Pivot.handleInMemoryRequest meta (data.ToArray()) (List.map fst ctx.request.query) ctx })
+      //*)
     pathScan "/%s" (fun id ctx -> async {
       let! ds = findPath (List.ofSeq(id.Split([|'.'|], StringSplitOptions.RemoveEmptyEntries))) datasets
       match ds with 

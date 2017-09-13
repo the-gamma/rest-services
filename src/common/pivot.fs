@@ -182,9 +182,29 @@ module Transform =
       let chunks = List.ofArray (if explicit then chunks.[0 .. chunks.Length - 2] else chunks)
       { Transformations = List.map parseTransform chunks; Action = action }    
 
-// ----------------------------------------------------------------------------
+// ------------------------------------------------------------------------------------------------
+// Serialize JsonValues
+// ------------------------------------------------------------------------------------------------
+
+module Serializer = 
+  let serializeValue = function 
+    | Value.String s -> JsonValue.String s 
+    | Value.Bool b -> JsonValue.Boolean b
+    | Value.Number n -> JsonValue.Float n
+    | Value.Date d -> JsonValue.String (d.ToString "o")
+
+  let serialize isSeries data = 
+    data 
+    |> Array.map (fun (fields:_[]) ->
+      if isSeries then
+        JsonValue.Array [| serializeValue (snd fields.[0]); serializeValue (snd fields.[1]) |]
+      else 
+        fields |> Array.map (fun (k, v) -> k, serializeValue v) |> JsonValue.Record)
+    |> JsonValue.Array
+
+// ------------------------------------------------------------------------------------------------
 // Evaluate query
-// ----------------------------------------------------------------------------
+// ------------------------------------------------------------------------------------------------
 
 module Evaluator = 
   let inline pickField name obj = 
@@ -274,52 +294,51 @@ module Evaluator =
     | InRange, Number n -> let expected = expected.Split(',') in n >= float expected.[0] && n <= float expected.[1]
     | (GreaterThan | LessThan | InRange), (Bool _ | String _) -> failwith "Relational operator work only on numbers"
 
-open Evaluator
+  let transformData (objs:seq<(string * Value)[]>) = function
+    | Empty -> objs
+    | Paging(pgops) ->
+        pgops |> Seq.fold (fun objs -> function
+          | Take n -> objs |> Seq.truncate n
+          | Skip n -> objs |> Seq.skip n) objs
+    | DropColumns(flds) ->
+        let dropped = set flds
+        objs |> Seq.map (fun obj ->
+          obj |> Array.filter (fst >> dropped.Contains >> not))
+    | SortBy(flds) ->
+        let flds = List.rev flds
+        objs |> Seq.sortWith (fun o1 o2 ->
+          let optRes = flds |> List.map (compareFields o1 o2) |> List.skipWhile ((=) 0) |> List.tryHead
+          defaultArg optRes 0)
+    | FilterBy(op, conds) ->
+        objs |> Seq.filter (fun o ->
+          let f = match op with And -> Seq.forall | Or -> Seq.exists
+          conds |> f (fun (op, fld, value) -> evalCondition op (pickField fld o) value))
+    | WindowBy(fld, size, aggs) ->
+        objs 
+        |> Seq.sortBy (pickField fld)
+        |> Seq.windowed size 
+        |> Seq.map (fun win ->
+          aggs
+          |> List.collect (applyWinAggregation fld win)
+          |> Array.ofSeq )
+    | ExpandBy(fld, aggs) ->
+        let funcs = aggs |> Seq.map (getExpandAggregationFunction fld) |> Array.ofSeq
+        objs 
+        |> Seq.sortBy (pickField fld)
+        |> Seq.map (fun row ->
+            funcs |> Array.map (fun f -> f row))
+    | GroupBy(flds, aggs) ->
+        objs 
+        |> Seq.groupBy (fun j -> List.map (fun f -> pickField f j) flds)
+        |> Seq.map (fun (kvals, group) ->
+          aggs 
+          |> List.collect (applyGroupAggregation (List.zip flds kvals) group)
+          |> Array.ofSeq )
 
-let transformData (objs:seq<(string * Value)[]>) = function
-  | Empty -> objs
-  | Paging(pgops) ->
-      pgops |> Seq.fold (fun objs -> function
-        | Take n -> objs |> Seq.truncate n
-        | Skip n -> objs |> Seq.skip n) objs
-  | DropColumns(flds) ->
-      let dropped = set flds
-      objs |> Seq.map (fun obj ->
-        obj |> Array.filter (fst >> dropped.Contains >> not))
-  | SortBy(flds) ->
-      let flds = List.rev flds
-      objs |> Seq.sortWith (fun o1 o2 ->
-        let optRes = flds |> List.map (compareFields o1 o2) |> List.skipWhile ((=) 0) |> List.tryHead
-        defaultArg optRes 0)
-  | FilterBy(op, conds) ->
-      objs |> Seq.filter (fun o ->
-        let f = match op with And -> Seq.forall | Or -> Seq.exists
-        conds |> f (fun (op, fld, value) -> evalCondition op (pickField fld o) value))
-  | WindowBy(fld, size, aggs) ->
-      objs 
-      |> Seq.sortBy (pickField fld)
-      |> Seq.windowed size 
-      |> Seq.map (fun win ->
-        aggs
-        |> List.collect (applyWinAggregation fld win)
-        |> Array.ofSeq )
-  | ExpandBy(fld, aggs) ->
-      let funcs = aggs |> Seq.map (getExpandAggregationFunction fld) |> Array.ofSeq
-      objs 
-      |> Seq.sortBy (pickField fld)
-      |> Seq.map (fun row ->
-          funcs |> Array.map (fun f -> f row))
-  | GroupBy(flds, aggs) ->
-      objs 
-      |> Seq.groupBy (fun j -> List.map (fun f -> pickField f j) flds)
-      |> Seq.map (fun (kvals, group) ->
-        aggs 
-        |> List.collect (applyGroupAggregation (List.zip flds kvals) group)
-        |> Array.ofSeq )
 
-// ----------------------------------------------------------------------------
+// ------------------------------------------------------------------------------------------------
 // Schema inference and CSV file parsing
-// ----------------------------------------------------------------------------
+// ------------------------------------------------------------------------------------------------
 
 exception ParseError of string
 
@@ -328,9 +347,7 @@ type InferredType =
   | Bool | OneZero 
   | Date of System.Globalization.CultureInfo
 
-
 module Inference = 
-
   let parseError s = raise (ParseError s)
 
   let tryDate culture s = 
@@ -362,14 +379,19 @@ module Inference =
     | Float, Int | Int, Float -> Float
     | _ -> String
 
-open Inference
+  let formatType = function
+    | InferredType.Any | InferredType.String -> "string"
+    | InferredType.Bool | InferredType.OneZero -> "bool"
+    | InferredType.Int | InferredType.Float -> "number"
+    | InferredType.Date _ -> "date"
 
 let inferTypes headers rows = 
   rows
-  |> Seq.map (Array.map inferType)
-  |> Seq.reduce (Array.map2 unifyTypes)
+  |> Seq.map (Array.map Inference.inferType)
+  |> Seq.reduce (Array.map2 Inference.unifyTypes)
   |> Seq.zip headers
   |> Array.ofSeq
+
 (*
 let readCsvFile (data:string) =   
   if String.IsNullOrWhiteSpace data then parseError "The specified input was empty."
@@ -416,46 +438,38 @@ let readCsvFile (data:string) =
   meta |> Seq.map (fun (n, ty) -> n, typeName ty) |> Array.ofSeq,
   data
   *)
-// ----------------------------------------------------------------------------
-// Pivot service
-// ----------------------------------------------------------------------------
 
-let serializeValue = function 
-  | Value.String s -> JsonValue.String s 
-  | Value.Bool b -> JsonValue.Boolean b
-  | Value.Number n -> JsonValue.Float n
-  | Value.Date d -> JsonValue.String (d.ToString "o")
+// ------------------------------------------------------------------------------------------------
+// Handling pivot queries in-memory
+// ------------------------------------------------------------------------------------------------
 
-let serialize isPreview isSeries data = 
-  let data = if isPreview then Array.truncate 10 data else data
-  data 
-  |> Array.map (fun (fields:_[]) ->
-    if isSeries then
-      JsonValue.Array [| serializeValue (snd fields.[0]); serializeValue (snd fields.[1]) |]
-    else 
-      fields |> Array.map (fun (k, v) -> k, serializeValue v) |> JsonValue.Record)
-  |> JsonValue.Array
+open Evaluator
+open Inference
+open Serializer
 
-let formatType = function
-  | InferredType.Any | InferredType.String -> "string"
-  | InferredType.Bool | InferredType.OneZero -> "bool"
-  | InferredType.Int | InferredType.Float -> "number"
-  | InferredType.Date _ -> "date"
+let truncatePreview isPreview = 
+  if isPreview then Array.truncate 10 else id 
 
 let applyAction isPreview meta objs = function
   | GetSeries(k, v) ->
-      objs |> Seq.map (fun obj ->
+      objs 
+      |> Seq.map (fun obj ->
         let kn, kval = Array.find (fst >> (=) k) obj
         let vn, vval = Array.find (fst >> (=) v) obj
-        [| kn, kval; vn, vval |]) |> Array.ofSeq |> serialize isPreview true
+        [| kn, kval; vn, vval |]) 
+      |> Array.ofSeq 
+      |> truncatePreview isPreview 
+      |> serialize true
   | GetTheData -> 
-      objs |> serialize isPreview false
+      objs
+      |> truncatePreview isPreview 
+      |> serialize false
   | Metadata -> 
       JsonValue.Record [| for k, v in meta -> k, JsonValue.String (formatType v) |]
   | GetRange(fld) ->
       objs |> Array.map (pickField fld) |> Array.distinct |> Array.map serializeValue |> JsonValue.Array
 
-let handleRequest meta source query = 
+let handleInMemoryRequest meta source query = 
   let source = source |> Seq.ofArray
   let preview, query = query |> List.partition ((=) "preview")
   let isPreview = not (List.isEmpty preview)
@@ -464,3 +478,152 @@ let handleRequest meta source query =
   let json = applyAction isPreview meta res query.Action
   Successful.OK (json.ToString())  
  
+// ------------------------------------------------------------------------------------------------
+// 
+// ------------------------------------------------------------------------------------------------
+
+type SqlQuerySource = 
+  | Table of string
+  | Nested of SqlQuery
+
+and SqlColumn = 
+  | Literal of string
+  | Column of string
+
+and SqlQuery = 
+  { Source : SqlQuerySource
+    Select : SqlColumn list
+    Paging : option<float * float>
+    OrderBy : option<list<string * SortDirection * (string -> string)>> }
+
+let nest query = 
+  { Source = Nested query 
+    Select = query.Select
+    Paging = None
+    OrderBy = None }
+
+let formatName col = 
+  if not (Seq.forall (fun c -> Char.IsLetterOrDigit(c) || c = '.' || c = '-' || c = '_') col) then
+    failwithf "Invalid column or table name: %s" col
+  "[" + col + "]"
+
+let rec formatSqlQuery query = 
+  let source = 
+    match query.Source with 
+    | Nested q -> "(" + formatSqlQuery q + ") t"
+    | Table s -> formatName s
+  "SELECT " + 
+  ( String.concat ", " 
+      [ for c in query.Select ->
+          match c with Literal s -> s | Column c -> formatName c ]) +
+  " FROM " + source + " " +
+  ( match query.OrderBy with 
+    | None -> ""
+    | Some ords -> 
+        "\nORDER BY " + String.concat "," 
+          [ for c, o, conv in ords -> conv (formatName c) + " " + if o = Descending then "DESC " else "ASC " ] ) +
+  ( match query.Paging with 
+    | None -> ""
+    | Some(skip, take) -> 
+        ("\nOFFSET " + (string (int skip)) + " ROWS ") + 
+        (if take <> infinity then "\nFETCH NEXT " + (string (int take)) + " ROWS ONLY" else "") )
+
+let rec translateQuery meta tfs query = 
+  match tfs with 
+  | [] -> query
+  | SortBy([])::tfs -> 
+      translateQuery meta tfs query
+
+  | SortBy(cols)::tfs -> 
+      let query = 
+        if query.Paging.IsNone then query
+        else nest query
+      let cols = 
+        [ for c, o in cols ->
+            match Map.tryFind c meta with 
+            | Some (InferredType.String | InferredType.Any) -> c, o, (sprintf "CAST(%s AS nvarchar(1000))")
+            | _ -> c, o, id ]
+      translateQuery meta tfs { query with OrderBy = Some cols }
+
+  | Paging(pgs)::tfs ->
+      let query = 
+        if query.OrderBy.IsSome then query 
+        else { query with Select = query.Select @ [Literal("0 as [temp_sort]")]; OrderBy = Some ["temp_sort", Ascending, id] }
+      let skip, take = defaultArg query.Paging (0., infinity) 
+      let skip, take = pgs |> List.fold (fun (skip, take) pg -> 
+        match pg with 
+        | Skip n -> (skip + float n, take - float n)
+        | Take n -> (skip, min (float n) take)) (skip, take)
+      translateQuery meta tfs { query with Paging = Some (skip, take) }
+  | _::tfs -> translateQuery meta tfs query
+(*
+let demo = 
+  { Action = GetTheData 
+    Transformations = 
+      [ SortBy ["air_pollution_score", Ascending]
+        Paging [Take 10; Skip 1; Take 20; Skip 1]
+      ]}
+
+translateQuery demo.Transformations   
+  { Source = Table "enigma-us.gov.epa.nvfel.fuel-economy.green.2014-preview"
+    Paging = None
+    OrderBy = None }
+|> formatSqlQuery
+
+*)
+
+let runQuery connStrSql table meta tfs = 
+  let query = 
+    translateQuery (Map.ofSeq meta) tfs 
+      { Select = meta |> Array.map (fst >> Column) |> List.ofArray
+        Source = Table table; Paging = None; OrderBy = None }
+    |> formatSqlQuery 
+  printfn "SQL: %s" query
+  Database.executeReader connStrSql query
+    (fun row -> meta |> Array.mapi (fun i (col, typ) ->
+      let isNull = row.IsDBNull(i)
+      match typ with
+      | InferredType.Any | InferredType.String when isNull -> col, Value.String("")
+      | _ when isNull -> failwith "Unexpected null value"
+      | InferredType.Any | InferredType.String -> col, Value.String(row.GetString(i))
+      | InferredType.Bool | InferredType.OneZero -> col, Value.Bool(row.GetBoolean(i))
+      | InferredType.Date _ -> col, Value.Date(row.GetDateTimeOffset(i))
+      | InferredType.Int -> col, Value.Number(float(row.GetInt32(i)))
+      | InferredType.Float -> col, Value.Number(float(row.GetFloat(i))) ))   
+
+let handleSqlRequest connStrSql table meta query = 
+  //let source = source |> Seq.ofArray
+  let preview, query = query |> List.partition ((=) "preview")
+  let isPreview = not (List.isEmpty preview)
+  let query = (match query with x::_ -> x | _ -> "") |> Transform.fromUrl
+  let query = 
+      if not isPreview then query
+      else { query with Transformations = query.Transformations @ [Paging [Take 10]] }
+
+  let json = 
+    match query.Action with
+    | Metadata -> 
+        JsonValue.Record [| for k, v in meta -> k, JsonValue.String (formatType v) |]
+    
+    | GetTheData ->
+        let res = runQuery connStrSql table meta query.Transformations
+        res.ToArray() |> serialize false
+
+    | _ -> JsonValue.Array [||]  
+
+
+
+  (*| GetSeries(k, v) ->
+    objs |> Seq.map (fun obj ->
+      let kn, kval = Array.find (fst >> (=) k) obj
+      let vn, vval = Array.find (fst >> (=) v) obj
+      [| kn, kval; vn, vval |]) |> Array.ofSeq |> serialize isPreview true
+  | GetTheData -> 
+      objs |> serialize isPreview false
+  | GetRange(fld) ->
+      objs |> Array.map (pickField fld) |> Array.distinct |> Array.map serializeValue |> JsonValue.Array
+
+  //let res = query.Transformations |> List.fold transformData source |> Array.ofSeq
+  //let json = applyAction isPreview meta res query.Action
+  *)
+  Successful.OK (json.ToString())  
