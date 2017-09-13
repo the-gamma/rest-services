@@ -55,7 +55,8 @@ let schema = Pivot.inferTypes headers data
 printfn "INFERRED SCHEMA:\n  %A\n" schema
 let sql = Database.scriptTable "my-table" schema 
 printfn "GENERATED SQL COMMAND:\n%s\n" sql
-Database.executeCommand connStrSql sql
+try Database.executeCommand connStrSql sql
+with e -> printfn "FAILED TO CREATE TABLE: %s" e.Message
 
 // Table should now be created and it should be empty...
 Database.executeScalarCommand connStrSql "SELECT Count(*) FROM [my-table]"
@@ -69,7 +70,7 @@ container.CreateIfNotExists(Microsoft.WindowsAzure.Storage.Blob.BlobContainerPub
 // ...and we register it as an external storage with the Azure SQL Server
 // (this will run once, but throw an exception if it already exists)
 try Database.initializeExternalBlob connStrSql "https://thegammadata.blob.core.windows.net"
-with e -> printfn "FAILED: %s" e.Message
+with e -> printfn "FAILED TO INITIALIZE BLOB: %s" e.Message
 
 // Now, generate some random data and run a BULK INSERT into the table
 // (this can fairly easily insert a few thousands rows at one time :-))
@@ -81,6 +82,7 @@ Database.insertRecords connStrBlob connStrSql "my-temp-blob" "my-table" 0
 
 // Count how many rows we have now!
 Database.executeScalarCommand connStrSql "SELECT Count(*) FROM [my-table]"
+|> printfn "DATA INSERTED: %A rows"
   
 
 // ------------------------------------------------------------------------------------------------
