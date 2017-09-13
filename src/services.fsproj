@@ -55,8 +55,8 @@
   <ItemGroup>
     <Compile Include="common\serializer.fs" />
     <Compile Include="common\storage.fs" />
-    <Compile Include="common\database.fs" />
     <Compile Include="common\pivot.fs" />
+    <Compile Include="common\database.fs" />
     <Compile Include="servers\enigma.fsx" />
     <Compile Include="servers\eurostat.fsx" />
     <Compile Include="release.fs" />
