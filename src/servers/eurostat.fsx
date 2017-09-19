@@ -50,53 +50,77 @@ let data =
     [| "CZ"; "2000"; "10.5" |]
     [| "GB"; "2000"; "2.5" |] ]
 
-// First, we infer types of the columns, generate SQL CREATE script and run it to create the table
-let schema = Pivot.inferTypes headers data
-printfn "INFERRED SCHEMA:\n  %A\n" schema
-let sql = Database.scriptTable "my-table" schema 
-printfn "GENERATED SQL COMMAND:\n%s\n" sql
-try Database.executeCommand connStrSql sql
-with e -> printfn "FAILED TO CREATE TABLE: %s" e.Message
+let readAndWriteFile fileName =
+  // First, we infer types of the columns, generate SQL CREATE script and run it to create the table
+  let contents = System.IO.File.ReadAllLines(fileName)
+  let headers = Seq.head contents
+  let parsedHeaders = headers.Split[|','|]
+  let rows = Seq.tail contents
+  let firstRow = Seq.head rows
+  let parsedFirstRow = firstRow.Split[|','|]
+  let rowsMinus1 = Seq.tail rows
+  let secondRow = Seq.head rowsMinus1
+  let parsedSecondRow = secondRow.Split[|','|]
+  let sampleData = [| parsedFirstRow; parsedSecondRow |]
+  let schema = Pivot.inferTypes parsedHeaders sampleData
+  printfn "INFERRED SCHEMA:\n  %A\n" schema
+  
+  let sql = Database.scriptTable "my-table" schema 
+  printfn "GENERATED SQL COMMAND:\n%s\n" sql
+  try Database.executeCommand connStrSql sql
+  with e -> printfn "FAILED TO CREATE TABLE: %s" e.Message
 
-// Table should now be created and it should be empty...
-Database.executeScalarCommand connStrSql "SELECT Count(*) FROM [my-table]"
-|> printfn "TABLE EXISTS: %A rows"
+let sourceRootPath = "/Users/myong/Documents/workspace/rest-services/src/data/"
+let sourceFiles = System.IO.Directory.GetFiles(sourceRootPath, "*.csv")
 
-// BULK INSERT can insert multiple rows into the SQL database fairly efficiently 
-// from a CSV file stored in a blob storage, so we first create a temp blob container
-let container = createCloudBlobClient(connStrBlob).GetContainerReference("my-temp-blob")
+sourceFiles |> Array.iter(fun file -> readAndWriteFile(file))
+
+let container = createCloudBlobClient(connStrBlob).GetContainerReference("my-temp-blob2")
 container.CreateIfNotExists(Microsoft.WindowsAzure.Storage.Blob.BlobContainerPublicAccessType.Container)
 
-// ...and we register it as an external storage with the Azure SQL Server
-// (this will run once, but throw an exception if it already exists)
-try Database.initializeExternalBlob connStrSql "https://thegammadata.blob.core.windows.net"
-with e -> printfn "FAILED TO INITIALIZE BLOB: %s" e.Message
 
-// Now, generate some random data and run a BULK INSERT into the table
-// (this can fairly easily insert a few thousands rows at one time :-))
-Database.insertRecords connStrBlob connStrSql "my-temp-blob" "my-table" 0 
-  [ let rnd = System.Random()
-    for country in ["CZ"; "GB"] do
-    for year in 1500 .. 2000 do 
-    yield [| country; string year; string (rnd.NextDouble()) |] ]
 
-// Count how many rows we have now!
-Database.executeScalarCommand connStrSql "SELECT Count(*) FROM [my-table]"
-|> printfn "DATA INSERTED: %A rows"
+
+
+// // Table should now be created and it should be empty...
+// Database.executeScalarCommand connStrSql "SELECT Count(*) FROM [my-table]"
+// |> printfn "TABLE EXISTS: %A rows"
+
+// // BULK INSERT can insert multiple rows into the SQL database fairly efficiently 
+// // from a CSV file stored in a blob storage, so we first create a temp blob container
+// let container = (connStrBlob).GetContainerReference("my-temp-blob")
+// container.CreateIfNotExists(Microsoft.WindowsAzure.Storage.Blob.BlobContainerPublicAccessType.Container)
+
+// // ...and we register it as an external storage with the Azure SQL Server
+// // (this will run once, but throw an exception if it already exists)
+// try Database.initializeExternalBlob connStrSql "https://thegammadata.blob.core.windows.net"
+// with e -> printfn "FAILED TO INITIALIZE BLOB: %s" e.Message
+
+// // Now, generate some random data and run a BULK INSERT into the table
+// // (this can fairly easily insert a few thousands rows at one time :-))
+// Database.insertRecords connStrBlob connStrSql "my-temp-blob" "my-table" 0 
+//   [ let rnd = System.Random()
+//     for country in ["CZ"; "GB"] do
+//     for year in 1500 .. 2000 do 
+//     yield [| country; string year; string (rnd.NextDouble()) |] ]
+
+// // Count how many rows we have now!
+// Database.executeScalarCommand connStrSql "SELECT Count(*) FROM [my-table]"
+// |> printfn "DATA INSERTED: %A rows"
   
 
-// ------------------------------------------------------------------------------------------------
-// Just a dummy REST service...
-// ------------------------------------------------------------------------------------------------
+// // ------------------------------------------------------------------------------------------------
+// // Just a dummy REST service...
+// // ------------------------------------------------------------------------------------------------
 
-open Suave
-open Suave.Filters
-open Suave.Operators
+// open Suave
+// open Suave.Filters
+// open Suave.Operators
 
-let app = 
-  choose [ 
-    path "/" >=>
-      returnMembers [
-        Member("zz", None, Nested("/"), [], [])
-      ]
-  ]
+// let app = 
+//   choose [ 
+//     path "/" >=>
+//       returnMembers [
+//         Member("zz", None, Nested("/"), [], [])
+//       ]
+//   ]
